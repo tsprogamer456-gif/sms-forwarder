@@ -1,6 +1,6 @@
 """
 Railway-optimized Data Processing System
-Uses Remote WebDriver with Selenium Standalone Chrome.
+Uses Browserless with Selenium Remote WebDriver.
 """
 
 import time
@@ -23,20 +23,24 @@ PASSWORD = os.getenv("PASSWORD", "Shifathossain")
 LOGIN_URL = "http://139.99.9.4/ints/login"
 DATA_URL = "http://139.99.9.4/ints/agent/SMSCDRStats"
 
-# ====== Remote Driver Setup ======
+# ====== Browserless Remote Driver Setup ======
 def create_driver():
+    """Browserless-এর সাথে সংযোগ স্থাপন (port 8080)"""
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1920,1080")
+    
+    # Browserless v1-এর WebDriver endpoint
     driver = webdriver.Remote(
-        command_executor='http://selenium:4444/wd/hub',
+        command_executor='http://browserless:8080/webdriver',
         options=options
     )
     driver.set_page_load_timeout(30)
     return driver
 
+# ====== ড্রাইভার তৈরি করুন ======
 driver = create_driver()
 wait = WebDriverWait(driver, 30)
 
@@ -214,7 +218,7 @@ def authenticate():
         return False
 
 # ====== Main ======
-print("🚀 Starting on Railway with Remote WebDriver...")
+print("🚀 Starting on Railway with Browserless...")
 print("=" * 50)
 
 if not authenticate():
