@@ -1,6 +1,6 @@
 FROM python:3.10-slim
 
-# Install Chromium and Chromium Driver
+# Linux এ Chromium Browser এবং Driver ইনস্টল
 RUN apt-get update && apt-get install -y \
     chromium \
     chromium-driver \
@@ -15,4 +15,4 @@ COPY . .
 
 ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "main.py"]
+CMD ["python", "greenhost.py"]
