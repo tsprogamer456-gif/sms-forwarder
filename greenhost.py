@@ -1,6 +1,7 @@
 """
-Data Processing and Notification System (Low-RAM Request-Based Version)
-This script runs efficiently on server environments by using HTTP sessions instead of heavy browsers.
+Data Processing and Notification System
+This script processes incoming data from a web source and forwards it to a messaging platform.
+All operations are performed in headless mode for server compatibility.
 """
 
 import time
@@ -8,7 +9,12 @@ import re
 import json
 import os
 import requests
-from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 # ====== Configuration (Loaded from Environment Variables) ======
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8020298281:AAEl9qyc0D7kvVMUJPireGjLCbHm_7sMQt0")
@@ -18,6 +24,30 @@ PASSWORD = os.getenv("APP_PASSWORD", "Shifathossain")
 
 LOGIN_URL = "http://139.99.9.4/ints/login"
 DATA_URL = "http://139.99.9.4/ints/agent/SMSCDRStats"
+
+# ====== Browser Setup (Railway Compatible Headless Mode) ======
+def create_browser():
+    """Initialize headless browser for server compatibility."""
+    options = Options()
+    options.add_argument("--headless=new")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
+    
+    # Railway Linux Environment Path Setup
+    if os.path.exists("/usr/bin/chromium"):
+        options.binary_location = "/usr/bin/chromium"
+        
+    service = Service("/usr/bin/chromedriver") if os.path.exists("/usr/bin/chromedriver") else Service()
+    
+    return webdriver.Chrome(service=service, options=options)
+
+driver = create_browser()
+wait = WebDriverWait(driver, 30)
 
 # ====== Country Data ======
 COUNTRY_CODES = {
@@ -90,46 +120,121 @@ def extract_code_from_text(text):
     match = re.search(r'\b\d{6}\b', text)
     return match.group(0) if match else None
 
-def solve_captcha_from_html(html_text):
-    """Extract math captcha from HTML source."""
-    match = re.search(r'What is (\d+)\s*[\+\-\*]\s*(\d+)', html_text)
-    if match:
-        num1, num2 = int(match.group(1)), int(match.group(2))
-        return num1 + num2 if '+' in match.group(0) else num1 - num2
-    return None
-
-def authenticate_session():
-    """Login using requests Session to avoid Selenium RAM usage."""
-    session = requests.Session()
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
-    session.headers.update(headers)
-    
+# ====== Data Processing Functions ======
+def process_captcha():
+    """Extract and solve mathematical captcha from page source."""
     try:
-        resp = session.get(LOGIN_URL, timeout=10)
-        captcha_ans = solve_captcha_from_html(resp.text)
+        print("🔍 Processing captcha...")
+        page_source = driver.page_source
         
-        if captcha_ans is None:
-            print("❌ Captcha not found on login page!")
-            return None
-
-        login_data = {
-            'username': USERNAME,
-            'password': PASSWORD,
-            'answer': str(captcha_ans)
-        }
-        
-        post_resp = session.post(LOGIN_URL, data=login_data, timeout=10)
-        if "login" not in post_resp.url and post_resp.status_code == 200:
-            print("✅ HTTP Login Successful!")
-            return session
+        match = re.search(r'What is (\d+)\s*[\+\-\*]\s*(\d+)', page_source)
+        if match:
+            num1 = int(match.group(1))
+            num2 = int(match.group(2))
+            if '+' in match.group(0):
+                result = num1 + num2
+                operator = '+'
+            elif '-' in match.group(0) or '−' in match.group(0):
+                result = num1 - num2
+                operator = '-'
+            else:
+                result = num1 + num2
+                operator = '+'
+            
+            print(f"🔢 Captcha: {num1} {operator} {num2} = {result}")
+            
+            answer_field = None
+            for selector in [By.NAME, By.ID, By.XPATH]:
+                try:
+                    if selector == By.NAME:
+                        answer_field = driver.find_element(By.NAME, "answer")
+                    elif selector == By.ID:
+                        answer_field = driver.find_element(By.ID, "answer")
+                    elif selector == By.XPATH:
+                        answer_field = driver.find_element(By.XPATH, "//input[@placeholder='Answer']")
+                    if answer_field:
+                        break
+                except:
+                    continue
+            
+            if answer_field:
+                answer_field.clear()
+                answer_field.send_keys(str(result))
+                print(f"✅ Captcha solved: {result}")
+                return True
+            else:
+                print("❌ Answer field not found!")
+                return False
         else:
-            print("❌ HTTP Login Failed!")
-            return None
+            print("❌ Captcha not found!")
+            return False
     except Exception as e:
-        print(f"⚠️ Auth error: {e}")
-        return None
+        print(f"⚠️ Captcha error: {e}")
+        return False
+
+def authenticate():
+    """Perform authentication to access data source."""
+    try:
+        print("\n🔐 Authenticating...")
+        driver.get(LOGIN_URL)
+        time.sleep(5)
+        
+        username_field = wait.until(EC.presence_of_element_located((By.NAME, "username")))
+        username_field.clear()
+        username_field.send_keys(USERNAME)
+        print("✅ Username entered")
+        
+        password_field = driver.find_element(By.NAME, "password")
+        password_field.clear()
+        password_field.send_keys(PASSWORD)
+        print("✅ Password entered")
+        
+        if not process_captcha():
+            print("⚠️ Captcha solving failed. Exiting...")
+            driver.quit()
+            return False
+        
+        print("🔄 Submitting form...")
+        js_code = """
+        var form = document.querySelector('form');
+        if (form) {
+            form.submit();
+            return true;
+        }
+        var buttons = document.querySelectorAll('button');
+        for (var i = 0; i < buttons.length; i++) {
+            if (buttons[i].textContent.trim().toUpperCase() === 'LOGIN') {
+                buttons[i].click();
+                return true;
+            }
+        }
+        var submitBtn = document.querySelector('button[type="submit"]');
+        if (submitBtn) {
+            submitBtn.click();
+            return true;
+        }
+        return false;
+        """
+        result = driver.execute_script(js_code)
+        if result:
+            print("✅ Form submitted successfully")
+        else:
+            print("❌ Submission failed!")
+            driver.quit()
+            return False
+        
+        time.sleep(5)
+        current_url = driver.current_url
+        
+        if "login" in current_url:
+            print("❌ Authentication failed!")
+            return False
+        
+        print("✅ Authentication successful!")
+        return True
+    except Exception as e:
+        print(f"⚠️ Authentication error: {e}")
+        return False
 
 def send_notification(number, code, message_text):
     """Send notification to messaging platform."""
@@ -161,19 +266,22 @@ def send_notification(number, code, message_text):
         if code:
             inline_keyboard_buttons.append({
                 "text": f"🔑 {code}",
+                "style": "success",
                 "copy_text": {"text": code}
             })
         if message_text.strip():
             inline_keyboard_buttons.append({
                 "text": "📋 FULL SMS",
+                "style": "success",
                 "copy_text": {"text": message_text}
             })
         if inline_keyboard_buttons:
-            payload['reply_markup'] = json.dumps({"inline_keyboard": [inline_keyboard_buttons]})
+            reply_markup = {"inline_keyboard": [inline_keyboard_buttons]}
+            payload['reply_markup'] = json.dumps(reply_markup)
         
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         requests.post(url, data=payload, timeout=5)
-        print(f"✅ Sent OTP: {code} → {number}")
+        print(f"✅ OTP: {code} → {number}")
         return True
     except Exception as e:
         print(f"⚠️ Notification error: {e}")
@@ -181,76 +289,61 @@ def send_notification(number, code, message_text):
 
 # ====== Main Execution ======
 if __name__ == "__main__":
-    print("🚀 Ultra Low-RAM OTP Forwarder Running...")
+    print("🚀 Data Processing and Notification System (Headless Mode)")
     print("=" * 50)
     
-    session = authenticate_session()
-    if not session:
-        print("❌ Could not authenticate. Exiting...")
-        exit(1)
-
+    if not authenticate():
+        print("❌ Authentication failed! Shutting down...")
+        driver.quit()
+        exit()
+    
+    driver.get(DATA_URL)
+    time.sleep(5)
+    
+    print("🚀 Monitoring started... (checking every 3 seconds)")
     sent_items = set()
     
-    # ১. স্ক্রিপ্ট চালুর মুহূর্তে পেজে থাকা আগের সব OTP ডাটা মেমরিতে লক করা (পাঠাবে না)
     try:
-        resp = session.get(DATA_URL, timeout=10)
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        rows = soup.select("table tbody tr")
-        
-        for row in rows:
-            cols = [td.text.strip() for td in row.find_all("td")]
-            if len(cols) >= 7:
-                timestamp, number, message_text = cols[0], cols[2], cols[5]
-                code = extract_code_from_text(message_text)
-                if code:
-                    sent_items.add(f"{number}_{code}_{timestamp}")
-        print(f"📦 Successfully ignored {len(sent_items)} past OTPs.")
-    except Exception as e:
-        print(f"⚠️ Error fetching history: {e}")
-
-    start_time = time.time()
-    ONE_HOUR = 3600
-
-    # ২. পলিং লুপ (যাতে ব্রাউজারের কোনো RAM খরচ হবে না)
-    while True:
-        # ১ ঘণ্টা পূর্ণ হলে বন্ধ হওয়া (Railway auto-restart করবে)
-        if time.time() - start_time >= ONE_HOUR:
-            print("⏰ 1 hour execution completed. Restarting app via Railway...")
-            break
-
-        try:
-            resp = session.get(DATA_URL, timeout=10)
-            
-            # সেশন এক্সপায়ার হয়ে গেলে পুনরায় লগইন
-            if "login" in resp.url:
-                print("⚠️ Session expired! Refreshing auth session...")
-                session = authenticate_session()
+        while True:
+            if "login" in driver.current_url:
+                print("⚠️ Session expired! Re-authenticating...")
+                authenticate()
+                driver.get(DATA_URL)
                 continue
-                
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            rows = soup.select("table tbody tr")
+            
+            driver.refresh()
+            time.sleep(2)
+            
+            rows = driver.find_elements(By.XPATH, "//table/tbody/tr")
             
             for row in rows:
-                cols = [td.text.strip() for td in row.find_all("td")]
-                if len(cols) >= 7:
-                    timestamp, number, message_text = cols[0], cols[2], cols[5]
-                    
-                    if not message_text:
-                        continue
+                try:
+                    cols = row.find_elements(By.TAG_NAME, "td")
+                    if len(cols) >= 7:
+                        timestamp = cols[0].text.strip()
+                        number = cols[2].text.strip()
+                        message_text = cols[5].text.strip()
                         
-                    code = extract_code_from_text(message_text)
-                    if code:
-                        unique_id = f"{number}_{code}_{timestamp}"
+                        if not message_text:
+                            continue
                         
-                        # নতুন OTP আসলেই কেবল টেলিগ্রামে ফরওয়ার্ড হবে
-                        if unique_id not in sent_items:
-                            send_notification(number, code, message_text)
-                            sent_items.add(unique_id)
-                            
-        except Exception as e:
-            print(f"⚠️ Fetching error: {e}")
-
-        time.sleep(3)
-
-    print("✅ Graceful shutdown. Container will now restart.")
-    exit(0)
+                        code = extract_code_from_text(message_text)
+                        if code:
+                            unique_id = f"{number}_{code}_{timestamp}"
+                            if unique_id not in sent_items:
+                                send_notification(number, code, message_text)
+                                sent_items.add(unique_id)
+                                if len(sent_items) > 500:
+                                    sent_items = set(list(sent_items)[-250:])
+                except:
+                    continue
+            
+            time.sleep(3)
+    except KeyboardInterrupt:
+        print("\n🛑 Shutting down...")
+    except Exception as e:
+        print(f"⚠️ Error: {e}")
+        time.sleep(5)
+    
+    driver.quit()
+    print("✅ Shutdown complete.")
